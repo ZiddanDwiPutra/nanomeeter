@@ -1,4 +1,6 @@
-import { createServer } from 'http'
+import { createServer as createHttpServer } from 'http'
+import { createServer as createHttpsServer } from 'https'
+import { readFileSync } from 'fs'
 import { readFile, stat } from 'fs/promises'
 import { extname, join, normalize } from 'path'
 import { fileURLToPath } from 'url'
@@ -49,7 +51,16 @@ async function serveStatic(req, res) {
   }
 }
 
-const server = createServer(serveStatic)
+const server =
+  process.env.MEETU_TLS_KEY && process.env.MEETU_TLS_CERT
+    ? createHttpsServer(
+        {
+          key: readFileSync(process.env.MEETU_TLS_KEY),
+          cert: readFileSync(process.env.MEETU_TLS_CERT),
+        },
+        serveStatic,
+      )
+    : createHttpServer(serveStatic)
 const wss = new WebSocketServer({ server, path: '/ws' })
 
 function send(ws, message) {

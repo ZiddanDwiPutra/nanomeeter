@@ -59,6 +59,7 @@ export default function Room({ roomId }: { roomId: string }) {
     let sig: SignalingClient | null = null
     let meeting: Meeting | null = null
     let localStream: MediaStream | null = null
+    let retriedAsJoin = false
     const names = new Map<string, string>()
 
     const cleanup = () => {
@@ -96,6 +97,17 @@ export default function Room({ roomId }: { roomId: string }) {
           void meeting?.handleSignal(msg.from, msg.data as SignalData)
           break
         case "error":
+          if (session.isHost && msg.message === "room already exists" && !retriedAsJoin) {
+            // a ghost room from a cancelled first mount (e.g. StrictMode) still holds the id
+            retriedAsJoin = true
+            sig?.send({
+              type: "join",
+              roomId,
+              password: session.passwordHash,
+              name: session.name,
+            })
+            break
+          }
           toast.error(msg.message)
           navigate("/")
           break
