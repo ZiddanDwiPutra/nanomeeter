@@ -1,0 +1,146 @@
+import { createServer } from 'http'
+import { readFile, stat } from 'fs/promises'
+import { extname, join, normalize } from 'path'
+import { fileURLToPath } from 'url'
+import { createHash, randomUUID } from 'crypto'
+import { WebSocketServer } from 'ws'
+
+const PORT = process.env.PORT || 8787
+const DIST = fileURLToPath(new URL('../dist', import.meta.url))
+
+const MIME = {
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+  '.ico': 'image/x-icon',
+  '.woff2': 'font/woff2',
+  '.map': 'application/json',
+}
+
+const rooms = new Map()
+
+const hash = (value) => createHash('sha256').update(String(value)).digest('hex')
+
+async function serveStatic(req, res) {
+  try {
+    const urlPath = decodeURIComponent(new URL(req.url, 'http://x').pathname)
+    let filePath = normalize(join(DIST, urlPath))
+    if (!filePath.startsWith(DIST)) {
+      res.writeHead(403).end()
+      return
+    }
+    let fileStat = await stat(filePath).catch(() => null)
+    if (!fileStat || fileStat.isDirectory()) {
+      filePath = join(DIST, 'index.html')
+      fileStat = await stat(filePath).catch(() => null)
+    }
+    if (!fileStat) {
+      res.writeHead(404).end('not found')
+      return
+    }
+    const body = await readFile(filePath)
+    res.writeHead(200, { 'Content-Type': MIME[extname(filePath)] ?? 'application/octet-stream' })
+    res.end(body)
+  } catch {
+    res.writeHead(500).end()
+  }
+}
+
+const server = createServer(serveStatic)
+const wss = new WebSocketServer({ server, path: '/ws' })
+
+function send(ws, message) {
+  if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(message))
+}
+
+function broadcast(room, message, exceptId = null) {
+  for (const [peerId, peer] of room.peers) {
+    if (peerId !== exceptId) send(peer.ws, message)
+  }
+}
+
+wss.on('connection', (ws) => {
+  let roomId = null
+  let peerId = null
+
+  const leave = () => {
+    if (!roomId || !peerId) return
+    const room = rooms.get(roomId)
+    if (!room) return
+    room.peers.delete(peerId)
+    if (room.peers.size === 0) {
+      rooms.delete(roomId)
+      console.log(`[room ${roomId}] closed`)
+    } else {
+      console.log(`[room ${roomId}] peer left (${room.peers.size} online)`)
+      broadcast(room, { type: 'peer-left', peerId })
+    }
+  }
+
+  ws.on('message', (raw) => {
+    let msg
+    try {
+      msg = JSON.parse(raw.toString())
+    } catch {
+      return
+    }
+
+    if (msg.type === 'create') {
+      if (!msg.roomId || !msg.password || !msg.name) {
+        return send(ws, { type: 'error', message: 'missing fields' })
+      }
+      if (rooms.has(msg.roomId)) {
+        return send(ws, { type: 'error', message: 'room already exists' })
+      }
+      roomId = String(msg.roomId)
+      peerId = randomUUID()
+      rooms.set(roomId, {
+        passwordHash: hash(msg.password),
+        peers: new Map([[peerId, { ws, name: String(msg.name).slice(0, 40) }]]),
+      })
+      console.log(`[room ${roomId}] created by ${msg.name}`)
+      return send(ws, { type: 'created', peerId, peers: [] })
+    }
+
+    if (msg.type === 'join') {
+      if (!msg.roomId || !msg.password || !msg.name) {
+        return send(ws, { type: 'error', message: 'missing fields' })
+      }
+      const room = rooms.get(String(msg.roomId))
+      if (!room) {
+        return send(ws, { type: 'error', message: 'room not found' })
+      }
+      if (room.passwordHash !== hash(msg.password)) {
+        return send(ws, { type: 'error', message: 'wrong password' })
+      }
+      if (room.peers.size >= 8) {
+        return send(ws, { type: 'error', message: 'room is full' })
+      }
+      roomId = String(msg.roomId)
+      peerId = randomUUID()
+      const peers = [...room.peers.entries()].map(([id, peer]) => ({ peerId: id, name: peer.name }))
+      room.peers.set(peerId, { ws, name: String(msg.name).slice(0, 40) })
+      broadcast(room, { type: 'peer-joined', peerId, name: String(msg.name).slice(0, 40) }, peerId)
+      console.log(`[room ${roomId}] ${msg.name} joined (${room.peers.size} online)`)
+      return send(ws, { type: 'joined', peerId, peers })
+    }
+
+    if (msg.type === 'signal' && roomId) {
+      const room = rooms.get(roomId)
+      const target = room?.peers.get(String(msg.to))
+      if (target) {
+        send(target.ws, { type: 'signal', from: peerId, data: msg.data })
+      }
+    }
+  })
+
+  ws.on('close', leave)
+  ws.on('error', leave)
+})
+
+server.listen(PORT, () => {
+  console.log(`meetu signaling server on http://localhost:${PORT}`)
+})
