@@ -8,7 +8,7 @@ import { sha256 } from "@/lib/crypto"
 import { navigate } from "@/lib/router"
 import { setSession } from "@/lib/session"
 
-export default function Join({ roomId }: { roomId: string }) {
+const Join = ({ roomId }: { roomId: string }) => {
   const [name, setName] = useState("")
   const [password, setPassword] = useState("")
 
@@ -67,3 +67,5 @@ export default function Join({ roomId }: { roomId: string }) {
     </div>
   )
 }
+
+export default Join

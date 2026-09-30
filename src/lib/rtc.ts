@@ -1,6 +1,7 @@
 export type SignalData = {
   description?: RTCSessionDescriptionInit
   candidate?: RTCIceCandidateInit
+  screenShare?: boolean
 }
 
 type PeerState = {
@@ -8,20 +9,45 @@ type PeerState = {
   makingOffer: boolean
   ignoreOffer: boolean
   polite: boolean
-  stream: MediaStream
+  mainStream: MediaStream
+  mainStreamId: string | null
+  screenStream: MediaStream | null
+  screenStreamId: string | null
 }
 
 export class Meeting {
   private peers = new Map<string, PeerState>()
   private localStream: MediaStream
+  private screenStream: MediaStream | null = null
   private sendSignal: (to: string, data: SignalData) => void
 
-  onRemoteStream: (peerId: string, stream: MediaStream) => void = () => {}
+  onRemoteStream: (peerId: string, stream: MediaStream, isScreen: boolean) => void = () => {}
+  onRemoteStreamRemoved: (peerId: string, isScreen: boolean) => void = () => {}
   onPeerRemoved: (peerId: string) => void = () => {}
 
   constructor(localStream: MediaStream, sendSignal: (to: string, data: SignalData) => void) {
     this.localStream = localStream
     this.sendSignal = sendSignal
+  }
+
+  setScreenStream(screenStream: MediaStream | null) {
+    this.screenStream = screenStream
+    for (const [peerId, peer] of this.peers.entries()) {
+      if (screenStream) {
+        for (const track of screenStream.getTracks()) {
+          peer.pc.addTrack(track, screenStream)
+        }
+        this.sendSignal(peerId, { screenShare: true })
+      } else {
+        const senders = peer.pc.getSenders()
+        for (const sender of senders) {
+          if (sender.track && !this.localStream.getTracks().includes(sender.track)) {
+            peer.pc.removeTrack(sender)
+          }
+        }
+        this.sendSignal(peerId, { screenShare: false })
+      }
+    }
   }
 
   addPeer(peerId: string, polite: boolean) {
@@ -35,12 +61,21 @@ export class Meeting {
       makingOffer: false,
       ignoreOffer: false,
       polite,
-      stream: new MediaStream(),
+      mainStream: new MediaStream(),
+      mainStreamId: null,
+      screenStream: null,
+      screenStreamId: null,
     }
     this.peers.set(peerId, peer)
 
     for (const track of this.localStream.getTracks()) {
       pc.addTrack(track, this.localStream)
+    }
+
+    if (this.screenStream) {
+      for (const track of this.screenStream.getTracks()) {
+        pc.addTrack(track, this.screenStream)
+      }
     }
 
     pc.onnegotiationneeded = async () => {
@@ -49,7 +84,6 @@ export class Meeting {
         await pc.setLocalDescription()
         this.sendSignal(peerId, { description: pc.localDescription ?? undefined })
       } catch {
-        // a later track change triggers negotiation again
       } finally {
         peer.makingOffer = false
       }
@@ -62,8 +96,34 @@ export class Meeting {
     }
 
     pc.ontrack = (event) => {
-      peer.stream.addTrack(event.track)
-      this.onRemoteStream(peerId, peer.stream)
+      const incomingStream = event.streams[0]
+      if (!incomingStream) {
+        peer.mainStream.addTrack(event.track)
+        this.onRemoteStream(peerId, peer.mainStream, false)
+        return
+      }
+
+      if (!peer.mainStreamId) {
+        peer.mainStreamId = incomingStream.id
+      }
+
+      if (incomingStream.id === peer.mainStreamId) {
+        peer.mainStream.addTrack(event.track)
+        this.onRemoteStream(peerId, peer.mainStream, false)
+      } else {
+        if (!peer.screenStream) {
+          peer.screenStream = new MediaStream()
+        }
+        peer.screenStreamId = incomingStream.id
+        peer.screenStream.addTrack(event.track)
+        this.onRemoteStream(peerId, peer.screenStream, true)
+
+        event.track.onended = () => {
+          peer.screenStream = null
+          peer.screenStreamId = null
+          this.onRemoteStreamRemoved(peerId, true)
+        }
+      }
     }
 
     pc.onconnectionstatechange = () => {
@@ -74,6 +134,12 @@ export class Meeting {
   async handleSignal(from: string, data: SignalData) {
     const peer = this.peers.get(from)
     if (!peer) return
+
+    if (data.screenShare === false) {
+      peer.screenStream = null
+      peer.screenStreamId = null
+      this.onRemoteStreamRemoved(from, true)
+    }
 
     const { pc } = peer
     try {

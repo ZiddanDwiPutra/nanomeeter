@@ -51,12 +51,15 @@ async function serveStatic(req, res) {
   }
 }
 
+const tlsKey = process.env.NANOMEETER_TLS_KEY || process.env.MEETU_TLS_KEY
+const tlsCert = process.env.NANOMEETER_TLS_CERT || process.env.MEETU_TLS_CERT
+
 const server =
-  process.env.MEETU_TLS_KEY && process.env.MEETU_TLS_CERT
+  tlsKey && tlsCert
     ? createHttpsServer(
         {
-          key: readFileSync(process.env.MEETU_TLS_KEY),
-          cert: readFileSync(process.env.MEETU_TLS_CERT),
+          key: readFileSync(tlsKey),
+          cert: readFileSync(tlsCert),
         },
         serveStatic,
       )
@@ -153,5 +156,5 @@ wss.on('connection', (ws) => {
 })
 
 server.listen(PORT, () => {
-  console.log(`meetu signaling server on http://localhost:${PORT}`)
+  console.log(`nanomeeter signaling server on http://localhost:${PORT}`)
 })

@@ -5,13 +5,13 @@ export interface Session {
   isHost: boolean
 }
 
-const key = (roomId: string) => `meetu:session:${roomId}`
+const key = (roomId: string) => `nanomeeter:session:${roomId}`
 
-export function setSession(session: Session) {
+export const setSession = (session: Session) => {
   sessionStorage.setItem(key(session.roomId), JSON.stringify(session))
 }
 
-export function getSession(roomId: string): Session | undefined {
+export const getSession = (roomId: string): Session | undefined => {
   const raw = sessionStorage.getItem(key(roomId))
   if (!raw) return undefined
   try {
@@ -21,6 +21,6 @@ export function getSession(roomId: string): Session | undefined {
   }
 }
 
-export function clearSession(roomId: string) {
+export const clearSession = (roomId: string) => {
   sessionStorage.removeItem(key(roomId))
 }

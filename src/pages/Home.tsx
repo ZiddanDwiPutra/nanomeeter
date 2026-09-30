@@ -8,7 +8,7 @@ import { newRoomId, sha256 } from "@/lib/crypto"
 import { navigate } from "@/lib/router"
 import { setSession } from "@/lib/session"
 
-export default function Home() {
+const Home = () => {
   const [name, setName] = useState("")
   const [password, setPassword] = useState("")
 
@@ -32,7 +32,7 @@ export default function Home() {
     <div className="flex min-h-svh items-center justify-center p-4">
       <Card className="w-full max-w-sm">
         <CardHeader>
-          <CardTitle className="text-2xl font-semibold tracking-tight">meetu</CardTitle>
+          <CardTitle className="text-2xl font-semibold tracking-tight">nanomeeter</CardTitle>
           <CardDescription>
             Peer-to-peer video meetings. No accounts, nothing stored.
           </CardDescription>
@@ -68,3 +68,5 @@ export default function Home() {
     </div>
   )
 }
+
+export default Home

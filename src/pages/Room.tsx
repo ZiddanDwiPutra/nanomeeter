@@ -1,52 +1,114 @@
-import { useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import { toast } from "sonner"
-import { Button } from "@/components/ui/button"
-import type { SignalData } from "@/lib/rtc"
-import { Meeting } from "@/lib/rtc"
+import { RoomControls } from "@/components/room/RoomControls"
+import { RoomHeader } from "@/components/room/RoomHeader"
+import { VideoTile, type Tile } from "@/components/room/VideoTile"
 import { joinLink } from "@/lib/crypto"
 import { navigate } from "@/lib/router"
+import type { SignalData } from "@/lib/rtc"
+import { Meeting } from "@/lib/rtc"
 import { clearSession, getSession } from "@/lib/session"
 import { SignalingClient, type ServerMessage } from "@/lib/signaling"
 
-interface Tile {
-  peerId: string
-  name: string
-  stream: MediaStream
-  isSelf: boolean
-}
-
-function VideoTile({ tile }: { tile: Tile }) {
-  const videoRef = useRef<HTMLVideoElement>(null)
-
-  useEffect(() => {
-    if (videoRef.current && videoRef.current.srcObject !== tile.stream) {
-      videoRef.current.srcObject = tile.stream
-    }
-  }, [tile.stream])
-
-  return (
-    <div className="relative aspect-video overflow-hidden rounded-lg border bg-black">
-      <video
-        ref={videoRef}
-        autoPlay
-        playsInline
-        muted={tile.isSelf}
-        className="h-full w-full object-cover"
-      />
-      <div className="absolute bottom-2 left-2 rounded bg-black/60 px-2 py-0.5 text-xs text-white">
-        {tile.name}
-        {tile.isSelf ? " (you)" : ""}
-      </div>
-    </div>
-  )
-}
-
-export default function Room({ roomId }: { roomId: string }) {
+const Room = ({ roomId }: { roomId: string }) => {
   const [tiles, setTiles] = useState<Tile[]>([])
   const [joined, setJoined] = useState(false)
   const [muted, setMuted] = useState(false)
   const [camOff, setCamOff] = useState(false)
+  const [isScreenSharing, setIsScreenSharing] = useState(false)
+
   const localStreamRef = useRef<MediaStream | null>(null)
+  const screenStreamRef = useRef<MediaStream | null>(null)
+  const meetingRef = useRef<Meeting | null>(null)
+  const sessionRef = useRef(getSession(roomId))
+
+  const stopScreenShare = useCallback(() => {
+    meetingRef.current?.setScreenStream(null)
+
+    if (screenStreamRef.current) {
+      screenStreamRef.current.getTracks().forEach((track) => track.stop())
+      screenStreamRef.current = null
+    }
+
+    setTiles((prev) => prev.filter((t) => t.peerId !== "self-screen"))
+    setIsScreenSharing(false)
+  }, [])
+
+  const startScreenShare = useCallback(async () => {
+    if (!navigator.mediaDevices?.getDisplayMedia) {
+      toast.error("Screen sharing is not supported in this browser")
+      return
+    }
+
+    try {
+      const screenStream = await navigator.mediaDevices.getDisplayMedia({
+        video: true,
+      })
+      const screenTrack = screenStream.getVideoTracks()[0]
+      if (!screenTrack) return
+
+      screenStreamRef.current = screenStream
+
+      screenTrack.onended = () => {
+        stopScreenShare()
+      }
+
+      meetingRef.current?.setScreenStream(screenStream)
+
+      const selfName = sessionRef.current?.name ?? "You"
+      setTiles((prev) => [
+        ...prev.filter((t) => t.peerId !== "self-screen"),
+        {
+          peerId: "self-screen",
+          name: `${selfName}'s screen`,
+          stream: screenStream,
+          isSelf: true,
+          isScreen: true,
+        },
+      ])
+
+      setIsScreenSharing(true)
+    } catch (error) {
+      if (error instanceof Error && error.name !== "NotAllowedError") {
+        toast.error("Failed to share screen")
+      }
+    }
+  }, [stopScreenShare])
+
+  const toggleScreenShare = () => {
+    if (isScreenSharing) {
+      stopScreenShare()
+    } else {
+      void startScreenShare()
+    }
+  }
+
+  const toggleMute = () => {
+    const stream = localStreamRef.current
+    if (!stream) return
+    const next = !muted
+    stream.getAudioTracks().forEach((t) => (t.enabled = !next))
+    setMuted(next)
+  }
+
+  const toggleCamera = () => {
+    const stream = localStreamRef.current
+    if (!stream) return
+    const next = !camOff
+    stream.getVideoTracks().forEach((t) => (t.enabled = !next))
+    setCamOff(next)
+  }
+
+  const copyLink = async () => {
+    await navigator.clipboard.writeText(joinLink(roomId))
+    toast.success("Invite link copied")
+  }
+
+  const leave = () => {
+    stopScreenShare()
+    clearSession(roomId)
+    navigate("/")
+  }
 
   useEffect(() => {
     const session = getSession(roomId)
@@ -54,6 +116,7 @@ export default function Room({ roomId }: { roomId: string }) {
       navigate(`/join/${roomId}`)
       return
     }
+    sessionRef.current = session
 
     let disposed = false
     let sig: SignalingClient | null = null
@@ -62,13 +125,15 @@ export default function Room({ roomId }: { roomId: string }) {
     let retriedAsJoin = false
     const names = new Map<string, string>()
 
-    // NOTE: never clear the session here. This cleanup runs on StrictMode remount
-    // and on page reload — wiping it bounces the user to the join page.
     const cleanup = () => {
       disposed = true
       sig?.close()
       meeting?.close()
+      meetingRef.current = null
+      screenStreamRef.current?.getTracks().forEach((t) => t.stop())
+      screenStreamRef.current = null
       localStream?.getTracks().forEach((t) => t.stop())
+      localStreamRef.current = null
     }
 
     const addPeer = (peerId: string, name: string, polite: boolean) => {
@@ -82,7 +147,13 @@ export default function Room({ roomId }: { roomId: string }) {
         case "joined":
           for (const peer of msg.peers) addPeer(peer.peerId, peer.name, false)
           setTiles((prev) => [
-            { peerId: "self", name: session.name, stream: localStream as MediaStream, isSelf: true },
+            {
+              peerId: "self",
+              name: session.name,
+              stream: localStream as MediaStream,
+              isSelf: true,
+              isScreen: false,
+            },
             ...prev.filter((t) => t.peerId !== "self"),
           ])
           setJoined(true)
@@ -92,14 +163,15 @@ export default function Room({ roomId }: { roomId: string }) {
           break
         case "peer-left":
           meeting?.removePeer(msg.peerId)
-          setTiles((prev) => prev.filter((t) => t.peerId !== msg.peerId))
+          setTiles((prev) =>
+            prev.filter((t) => t.peerId !== msg.peerId && t.peerId !== `${msg.peerId}-screen`),
+          )
           break
         case "signal":
           void meeting?.handleSignal(msg.from, msg.data as SignalData)
           break
         case "error":
           if (session.isHost && msg.message === "room already exists" && !retriedAsJoin) {
-            // a ghost room from a cancelled first mount (e.g. StrictMode) still holds the id
             retriedAsJoin = true
             sig?.send({
               type: "join",
@@ -136,13 +208,31 @@ export default function Room({ roomId }: { roomId: string }) {
 
       sig = new SignalingClient()
       meeting = new Meeting(localStream, (to, data) => sig?.send({ type: "signal", to, data }))
-      meeting.onRemoteStream = (peerId, stream) => {
+      meetingRef.current = meeting
+
+      meeting.onRemoteStream = (peerId, stream, isScreen) => {
+        const tileId = isScreen ? `${peerId}-screen` : peerId
+        const peerName = names.get(peerId) ?? "Guest"
+        const displayName = isScreen ? `${peerName}'s screen` : peerName
+
         setTiles((prev) =>
-          prev.some((t) => t.peerId === peerId)
+          prev.some((t) => t.peerId === tileId)
             ? prev
-            : [...prev, { peerId, name: names.get(peerId) ?? "Guest", stream, isSelf: false }],
+            : [...prev, { peerId: tileId, name: displayName, stream, isSelf: false, isScreen }],
         )
       }
+
+      meeting.onRemoteStreamRemoved = (peerId, isScreen) => {
+        const tileId = isScreen ? `${peerId}-screen` : peerId
+        setTiles((prev) => prev.filter((t) => t.peerId !== tileId))
+      }
+
+      meeting.onPeerRemoved = (peerId) => {
+        setTiles((prev) =>
+          prev.filter((t) => t.peerId !== peerId && t.peerId !== `${peerId}-screen`),
+        )
+      }
+
       sig.onMessage(onMessage)
 
       try {
@@ -166,32 +256,6 @@ export default function Room({ roomId }: { roomId: string }) {
     return cleanup
   }, [roomId])
 
-  const toggleMute = () => {
-    const stream = localStreamRef.current
-    if (!stream) return
-    const next = !muted
-    stream.getAudioTracks().forEach((t) => (t.enabled = !next))
-    setMuted(next)
-  }
-
-  const toggleCamera = () => {
-    const stream = localStreamRef.current
-    if (!stream) return
-    const next = !camOff
-    stream.getVideoTracks().forEach((t) => (t.enabled = !next))
-    setCamOff(next)
-  }
-
-  const copyLink = async () => {
-    await navigator.clipboard.writeText(joinLink(roomId))
-    toast.success("Invite link copied")
-  }
-
-  const leave = () => {
-    clearSession(roomId)
-    navigate("/")
-  }
-
   if (!joined) {
     return (
       <div className="flex min-h-svh items-center justify-center">
@@ -202,20 +266,7 @@ export default function Room({ roomId }: { roomId: string }) {
 
   return (
     <div className="flex min-h-svh flex-col">
-      <header className="flex items-center justify-between border-b px-4 py-3">
-        <span className="text-lg font-semibold tracking-tight">meetu</span>
-        <div className="flex items-center gap-2">
-          <span className="hidden font-mono text-xs text-muted-foreground sm:inline">
-            {roomId}
-          </span>
-          <Button variant="outline" size="sm" onClick={() => void copyLink()}>
-            Copy link
-          </Button>
-          <Button variant="destructive" size="sm" onClick={leave}>
-            Leave
-          </Button>
-        </div>
-      </header>
+      <RoomHeader roomId={roomId} onCopyLink={() => void copyLink()} onLeave={leave} />
 
       <main className="flex-1 p-4">
         <div className="mx-auto grid max-w-6xl gap-4 sm:grid-cols-2 xl:grid-cols-3">
@@ -230,14 +281,16 @@ export default function Room({ roomId }: { roomId: string }) {
         )}
       </main>
 
-      <footer className="flex justify-center gap-2 border-t p-4">
-        <Button variant={muted ? "default" : "outline"} onClick={toggleMute}>
-          {muted ? "Unmute" : "Mute"}
-        </Button>
-        <Button variant={camOff ? "default" : "outline"} onClick={toggleCamera}>
-          {camOff ? "Camera on" : "Camera off"}
-        </Button>
-      </footer>
+      <RoomControls
+        muted={muted}
+        camOff={camOff}
+        isScreenSharing={isScreenSharing}
+        onToggleMute={toggleMute}
+        onToggleCamera={toggleCamera}
+        onToggleScreenShare={toggleScreenShare}
+      />
     </div>
   )
 }
+
+export default Room

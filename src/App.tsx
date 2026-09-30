@@ -4,7 +4,7 @@ import Join from "@/pages/Join"
 import Room from "@/pages/Room"
 import { useRoute } from "@/lib/router"
 
-export default function App() {
+const App = () => {
   const route = useRoute()
 
   return (
@@ -16,3 +16,5 @@ export default function App() {
     </>
   )
 }
+
+export default App
