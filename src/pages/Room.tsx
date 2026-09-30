@@ -62,12 +62,13 @@ export default function Room({ roomId }: { roomId: string }) {
     let retriedAsJoin = false
     const names = new Map<string, string>()
 
+    // NOTE: never clear the session here. This cleanup runs on StrictMode remount
+    // and on page reload — wiping it bounces the user to the join page.
     const cleanup = () => {
       disposed = true
       sig?.close()
       meeting?.close()
       localStream?.getTracks().forEach((t) => t.stop())
-      clearSession(roomId)
     }
 
     const addPeer = (peerId: string, name: string, polite: boolean) => {
@@ -109,6 +110,7 @@ export default function Room({ roomId }: { roomId: string }) {
             break
           }
           toast.error(msg.message)
+          clearSession(roomId)
           navigate("/")
           break
       }
@@ -122,6 +124,7 @@ export default function Room({ roomId }: { roomId: string }) {
         })
       } catch {
         toast.error("Camera and microphone access is required")
+        clearSession(roomId)
         navigate("/")
         return
       }
@@ -146,6 +149,7 @@ export default function Room({ roomId }: { roomId: string }) {
         await sig.ready
       } catch {
         toast.error("Could not reach the signaling server")
+        clearSession(roomId)
         navigate("/")
         return
       }
@@ -184,6 +188,7 @@ export default function Room({ roomId }: { roomId: string }) {
   }
 
   const leave = () => {
+    clearSession(roomId)
     navigate("/")
   }
 

@@ -5,16 +5,22 @@ export interface Session {
   isHost: boolean
 }
 
-const sessions = new Map<string, Session>()
+const key = (roomId: string) => `meetu:session:${roomId}`
 
 export function setSession(session: Session) {
-  sessions.set(session.roomId, session)
+  sessionStorage.setItem(key(session.roomId), JSON.stringify(session))
 }
 
 export function getSession(roomId: string): Session | undefined {
-  return sessions.get(roomId)
+  const raw = sessionStorage.getItem(key(roomId))
+  if (!raw) return undefined
+  try {
+    return JSON.parse(raw) as Session
+  } catch {
+    return undefined
+  }
 }
 
 export function clearSession(roomId: string) {
-  sessions.delete(roomId)
+  sessionStorage.removeItem(key(roomId))
 }
