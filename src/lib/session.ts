@@ -3,6 +3,8 @@ export interface Session {
   name: string
   passwordHash: string
   isHost: boolean
+  audioEnabled?: boolean
+  videoEnabled?: boolean
 }
 
 const key = (roomId: string) => `nanomeeter:session:${roomId}`
