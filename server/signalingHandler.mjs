@@ -80,6 +80,14 @@ export function attachSignalingHandler(wss) {
         return send(ws, { type: 'joined', peerId, peers })
       }
 
+      if (msg.type === 'chat' && roomId) {
+        const room = rooms.get(roomId)
+        if (room) {
+          broadcast(room, { type: 'chat', from: peerId, message: msg.message }, peerId)
+        }
+        return
+      }
+
       if (msg.type === 'signal' && roomId) {
         const room = rooms.get(roomId)
         const target = room?.peers.get(String(msg.to))

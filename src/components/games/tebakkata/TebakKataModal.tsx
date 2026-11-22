@@ -1,49 +1,70 @@
 import { useEffect } from "react"
-import { Award, ChevronRight, HelpCircle, RotateCcw, Sparkles, Square, Trophy, X } from "lucide-react"
+import { CheckCircle2, HelpCircle, RotateCcw, Sparkles, Square, X, XCircle } from "lucide-react"
 import { Button } from "@/components/ui/button"
-import type { WordCategory, WordPuzzle } from "@/types/wordguess"
+import type {
+  TebakKataPlayerAnswer,
+  TebakKataStatus,
+  WordPuzzle,
+} from "@/types/wordguess"
 import { CATEGORIES } from "./wordBank"
 import { TebakKataChoices } from "./TebakKataChoices"
+import { TebakKataLeaderboard } from "./TebakKataLeaderboard"
 import { TebakKataSlots } from "./TebakKataSlots"
+import { TebakKataTimer } from "./TebakKataTimer"
 
 interface TebakKataModalProps {
   isOpen: boolean
   onClose: () => void
   onEndGame?: () => void
+  onPlayAgain?: () => void
   puzzle: WordPuzzle | null
   placedLetters: Record<number, { letter: string; choiceIndex: number }>
   usedChoiceIndices: number[]
   isSolved: boolean
   isIncorrect: boolean
-  solvedBy: string | null
+  hasAnswered: boolean
+  myAnswer: TebakKataPlayerAnswer | null
+  answeredPlayers: Record<string, TebakKataPlayerAnswer>
   scores: Record<string, number>
   round: number
+  totalRounds: number
+  roundDuration: number
+  roundStartedAt: number
+  status: TebakKataStatus
   isHost: boolean
   currentUserName: string
+  totalActivePlayers: number
   onSelectChoice: (choiceIndex: number) => void
   onRemoveLetter: (blankIndex: number) => void
   onResetPlaced: () => void
-  onNextWord?: (category?: WordCategory) => void
+  onTimeout: () => void
 }
 
 export const TebakKataModal = ({
   isOpen,
   onClose,
   onEndGame,
+  onPlayAgain,
   puzzle,
   placedLetters,
   usedChoiceIndices,
   isSolved,
   isIncorrect,
-  solvedBy,
+  hasAnswered,
+  myAnswer,
+  answeredPlayers,
   scores,
   round,
+  totalRounds,
+  roundDuration,
+  roundStartedAt,
+  status,
   isHost,
-  currentUserName,
+  totalActivePlayers,
   onSelectChoice,
   onRemoveLetter,
   onResetPlaced,
-  onNextWord,
+  onTimeout,
 }: TebakKataModalProps) => {
   useEffect(() => {
     if (!isOpen) return
@@ -54,7 +75,27 @@ export const TebakKataModal = ({
     return () => window.removeEventListener("keydown", handleKeyDown)
   }, [isOpen, onClose])
 
-  if (!isOpen || !puzzle) return null
+  if (!isOpen) return null
+
+  // If game is over, render the final leaderboard with confetti!
+  if (status === "game_over") {
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-xs animate-in fade-in duration-200">
+        <div className="fixed inset-0" onClick={onClose} aria-hidden="true" />
+        <div className="relative z-10 w-full max-w-md rounded-2xl border bg-background p-6 shadow-2xl animate-in zoom-in-95 duration-200">
+          <TebakKataLeaderboard
+            scores={scores}
+            totalRounds={totalRounds}
+            isHost={isHost}
+            onPlayAgain={onPlayAgain}
+            onClose={onClose}
+          />
+        </div>
+      </div>
+    )
+  }
+
+  if (!puzzle) return null
 
   const categoryMeta = CATEGORIES.find((c) => c.id === puzzle.category) ?? {
     id: puzzle.category,
@@ -62,7 +103,8 @@ export const TebakKataModal = ({
     icon: "🎯",
   }
 
-  const scoreEntries = Object.entries(scores).sort((a, b) => b[1] - a[1])
+  const answeredCount = Object.keys(answeredPlayers).length
+  const isRoundResult = status === "round_result"
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-xs animate-in fade-in duration-200">
@@ -78,8 +120,8 @@ export const TebakKataModal = ({
             <div>
               <div className="flex items-center gap-2">
                 <h3 className="text-sm font-bold tracking-tight">Tebak Kata</h3>
-                <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-semibold text-primary">
-                  Ronde #{round}
+                <span className="rounded-full bg-cyan-500/15 px-2 py-0.5 text-[10px] font-bold text-cyan-400">
+                  Babak {round} / {totalRounds}
                 </span>
               </div>
               <p className="text-[11px] text-muted-foreground">Lengkapi huruf yang hilang</p>
@@ -100,33 +142,29 @@ export const TebakKataModal = ({
           </div>
         </div>
 
-        {/* Category Pill and Word Hint */}
-        <div className="my-3 flex items-center justify-between gap-2">
-          <div className="flex items-center gap-1.5 rounded-full border border-primary/20 bg-primary/5 px-3 py-1 text-xs font-semibold text-foreground">
+        {/* Countdown Timer */}
+        <TebakKataTimer
+          roundDuration={roundDuration}
+          roundStartedAt={roundStartedAt}
+          isActive={status === "playing"}
+          hasAnswered={hasAnswered}
+          onTimeout={onTimeout}
+        />
+
+        {/* Category Pill and Answered Counter */}
+        <div className="my-2.5 flex items-center justify-between gap-2">
+          <div className="flex items-center gap-1.5 rounded-full border border-primary/20 bg-primary/5 px-3 py-0.5 text-xs font-semibold text-foreground">
             <span className="text-sm">{categoryMeta.icon}</span>
             <span>Kategori:</span>
             <span className="text-cyan-400 capitalize">{categoryMeta.label}</span>
           </div>
 
-          {isHost && onNextWord && (
-            <div className="flex items-center gap-1">
-              {CATEGORIES.map((cat) => (
-                <button
-                  key={cat.id}
-                  type="button"
-                  onClick={() => onNextWord(cat.id)}
-                  title={`Ganti kata ke kategori ${cat.label}`}
-                  className={`size-7 rounded-lg text-xs transition-all flex items-center justify-center cursor-pointer ${
-                    puzzle.category === cat.id
-                      ? "bg-cyan-500/20 text-cyan-400 border border-cyan-500/40"
-                      : "bg-muted/40 hover:bg-muted text-muted-foreground"
-                  }`}
-                >
-                  {cat.icon}
-                </button>
-              ))}
-            </div>
-          )}
+          <div className="flex items-center gap-1 text-[11px] font-medium text-muted-foreground bg-muted/40 px-2.5 py-0.5 rounded-full border border-border/40">
+            <span>Sudah jawab:</span>
+            <strong className="text-foreground">
+              {answeredCount}/{Math.max(1, totalActivePlayers)}
+            </strong>
+          </div>
         </div>
 
         {/* Word Display Slots */}
@@ -135,28 +173,38 @@ export const TebakKataModal = ({
           placedLetters={placedLetters}
           isSolved={isSolved}
           isIncorrect={isIncorrect}
+          revealWord={isRoundResult}
           onRemoveLetter={onRemoveLetter}
         />
 
-        {/* Status / Feedback Banner */}
-        <div className="mb-2 flex items-center justify-center rounded-xl bg-muted/50 py-2 px-3 text-center text-xs font-medium">
-          {isSolved ? (
-            <div className="flex items-center gap-1.5 text-emerald-400 font-bold animate-bounce">
-              <Trophy className="size-4 text-amber-400" />
-              <span>
-                {solvedBy === currentUserName
-                  ? "Hebat! Kamu berhasil menebak dengan benar!"
-                  : `🎉 ${solvedBy || "Seseorang"} berhasil menebak: ${puzzle.word}!`}
-              </span>
+        {/* Status / Feedback Banner ("anda salah / benar") */}
+        <div className="mb-2.5 flex items-center justify-center rounded-xl p-3 text-center text-xs font-medium transition-all">
+          {isRoundResult ? (
+            <div className="space-y-1">
+              <div className="font-bold text-foreground flex items-center justify-center gap-1.5">
+                <span>Babak {round} Selesai! Kata yang benar:</span>
+                <span className="text-amber-400 uppercase tracking-wider">{puzzle.word}</span>
+              </div>
+              <div className="text-[11px] text-muted-foreground">
+                Melanjutkan ke babak berikutnya...
+              </div>
             </div>
-          ) : isIncorrect ? (
-            <div className="flex items-center gap-1.5 text-destructive font-semibold">
-              <span>Kata belum tepat. Tap huruf di kotak untuk mengganti!</span>
-            </div>
+          ) : hasAnswered ? (
+            myAnswer?.isCorrect ? (
+              <div className="flex items-center gap-2 text-emerald-400 font-bold bg-emerald-500/10 border border-emerald-500/20 px-3 py-2 rounded-xl w-full justify-center">
+                <CheckCircle2 className="size-4 shrink-0" />
+                <span>Anda Benar! (+{myAnswer.pointsEarned} Poin)</span>
+              </div>
+            ) : (
+              <div className="flex items-center gap-2 text-destructive font-bold bg-destructive/10 border border-destructive/20 px-3 py-2 rounded-xl w-full justify-center">
+                <XCircle className="size-4 shrink-0" />
+                <span>Anda Salah! (0 Poin)</span>
+              </div>
+            )
           ) : (
-            <div className="flex items-center gap-1 text-muted-foreground text-[11px]">
+            <div className="flex items-center gap-1.5 text-muted-foreground text-[11px] bg-muted/40 px-3 py-1.5 rounded-xl border border-border/40">
               <Sparkles className="size-3 text-amber-400 shrink-0" />
-              <span>Pilih dari 6 huruf di bawah untuk melengkapi huruf kosong.</span>
+              <span>Semakin cepat menjawab, semakin besar poin yang didapat!</span>
             </div>
           )}
         </div>
@@ -165,22 +213,23 @@ export const TebakKataModal = ({
         <TebakKataChoices
           choices={puzzle.choices}
           usedChoiceIndices={usedChoiceIndices}
-          disabled={isSolved}
+          disabled={hasAnswered || isRoundResult}
           onSelectChoice={onSelectChoice}
         />
 
-        {/* Mini Leaderboard if any scores */}
-        {scoreEntries.length > 0 && (
+        {/* Mini Scores Ribbon */}
+        {Object.keys(scores).length > 0 && (
           <div className="mt-3 flex items-center gap-2 overflow-x-auto rounded-lg border border-border/60 bg-muted/20 px-3 py-1.5 text-[11px]">
-            <Award className="size-3.5 text-amber-400 shrink-0" />
-            <span className="font-semibold text-muted-foreground shrink-0">Skor:</span>
+            <span className="font-bold text-muted-foreground shrink-0">Skor Sementara:</span>
             <div className="flex items-center gap-3">
-              {scoreEntries.map(([name, score]) => (
-                <span key={name} className="truncate">
-                  <strong className="text-foreground">{name}:</strong>{" "}
-                  <span className="text-cyan-400 font-bold">{score}</span>
-                </span>
-              ))}
+              {Object.entries(scores)
+                .sort((a, b) => b[1] - a[1])
+                .map(([name, score]) => (
+                  <span key={name} className="truncate">
+                    <strong className="text-foreground">{name}:</strong>{" "}
+                    <span className="text-cyan-400 font-bold">{score}</span>
+                  </span>
+                ))}
             </div>
           </div>
         )}
@@ -188,7 +237,7 @@ export const TebakKataModal = ({
         {/* Footer Actions */}
         <div className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t pt-3">
           <div className="flex items-center gap-1.5">
-            {!isSolved && Object.keys(placedLetters).length > 0 && (
+            {!hasAnswered && !isRoundResult && Object.keys(placedLetters).length > 0 && (
               <Button
                 variant="outline"
                 size="sm"
@@ -197,18 +246,6 @@ export const TebakKataModal = ({
               >
                 <RotateCcw className="size-3" />
                 <span>Reset</span>
-              </Button>
-            )}
-
-            {isHost && onNextWord && (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => onNextWord()}
-                className="h-8 gap-1.5 text-xs border-cyan-500/40 text-cyan-400 hover:bg-cyan-500/10"
-              >
-                <span>Kata Berikutnya</span>
-                <ChevronRight className="size-3.5" />
               </Button>
             )}
           </div>

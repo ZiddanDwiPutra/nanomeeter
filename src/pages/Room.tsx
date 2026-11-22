@@ -7,6 +7,7 @@ import { ActiveGameButton } from "@/components/games/ActiveGameButton"
 import { GamesListModal } from "@/components/games/GamesListModal"
 import { HostGamesButton } from "@/components/games/HostGamesButton"
 import { TebakKataModal } from "@/components/games/tebakkata/TebakKataModal"
+import { TebakKataSetupModal } from "@/components/games/tebakkata/TebakKataSetupModal"
 import { useTebakKata } from "@/components/games/tebakkata/useTebakKata"
 import { TicTacToeModal } from "@/components/games/tictactoe/TicTacToeModal"
 import { TicTacToeSetupModal } from "@/components/games/tictactoe/TicTacToeSetupModal"
@@ -25,7 +26,7 @@ import { clearSession, getSession } from "@/lib/session"
 import { SignalingClient, type ServerMessage } from "@/lib/signaling"
 import type { ChatMessage } from "@/types/chat"
 import type { GameParticipant, GameSyncMessage, TicTacToePlayers } from "@/types/game"
-import type { WordCategory } from "@/types/wordguess"
+import type { TebakKataConfig } from "@/types/wordguess"
 
 const Room = ({ roomId }: { roomId: string }) => {
   const [tiles, setTiles] = useState<Tile[]>([])
@@ -39,7 +40,14 @@ const Room = ({ roomId }: { roomId: string }) => {
   const [showQr, setShowQr] = useState(false)
   const [isGameListOpen, setIsGameListOpen] = useState(false)
   const [isSetupOpen, setIsSetupOpen] = useState(false)
+  const [isTebakKataSetupOpen, setIsTebakKataSetupOpen] = useState(false)
   const [activeGame, setActiveGame] = useState<string | null>(null)
+  const activeGameRef = useRef<string | null>(null)
+  useEffect(() => {
+    activeGameRef.current = activeGame
+  })
+  const sigRef = useRef<SignalingClient | null>(null)
+  const processedMessageIds = useRef(new Set<string>())
   const [isGameModalOpen, setIsGameModalOpen] = useState(false)
   const isGameModalOpenRef = useRef(false)
   useEffect(() => {
@@ -162,7 +170,7 @@ const Room = ({ roomId }: { roomId: string }) => {
       try {
         const newTrack = await requestMediaTrack("audio")
         if (newTrack) {
-          meetingRef.current?.addLocalTrack(newTrack)
+          await meetingRef.current?.addLocalTrack(newTrack)
           meetingRef.current?.setLocalMediaState(camOff, false)
           setMuted(false)
           setTiles((prev) =>
@@ -196,7 +204,7 @@ const Room = ({ roomId }: { roomId: string }) => {
       try {
         const newTrack = await requestMediaTrack("video")
         if (newTrack) {
-          meetingRef.current?.addLocalTrack(newTrack)
+          await meetingRef.current?.addLocalTrack(newTrack)
           meetingRef.current?.setLocalMediaState(false, muted)
           setCamOff(false)
           setTiles((prev) =>
@@ -235,6 +243,94 @@ const Room = ({ roomId }: { roomId: string }) => {
     isChatOpenRef.current = false
   }
 
+  const handleIncomingChatMessage = useCallback((message: ChatMessage) => {
+    if (processedMessageIds.current.has(message.id)) return
+    processedMessageIds.current.add(message.id)
+    if (processedMessageIds.current.size > 200) {
+      const first = processedMessageIds.current.values().next().value
+      if (first) processedMessageIds.current.delete(first)
+    }
+
+    try {
+      const parsed = JSON.parse(message.text)
+      if (parsed.__nanomeeter_game__) {
+        const gameMsg = parsed as GameSyncMessage
+        if (gameMsg.type === "launch") {
+          setActiveGame(gameMsg.gameId)
+          setIsGameModalOpen(true)
+          if (gameMsg.gameId === "tictactoe" && gameMsg.players) {
+            tttRef.current.syncState({
+              players: gameMsg.players,
+              board: gameMsg.board ?? Array(9).fill(null),
+              turn: gameMsg.turn ?? "X",
+              roundStarter: gameMsg.turn ?? "X",
+              winner: null,
+              winningLine: null,
+            })
+            const pX = gameMsg.players?.X.name || "Player X"
+            const pO = gameMsg.players?.O.name || "Player O"
+            toast.info(`Tic Tac Toe: ${pX} vs ${pO}`)
+          } else if (gameMsg.gameId === "tebakkata" && gameMsg.tebakKata) {
+            tkRef.current.syncState(gameMsg.tebakKata, sessionRef.current?.name)
+            setActiveGame("tebakkata")
+            setIsGameModalOpen(true)
+            toast.info("Host memulai game Tebak Kata!")
+          }
+        } else if (gameMsg.type === "answer") {
+          if (gameMsg.gameId === "tebakkata" && gameMsg.tebakKataAnswer) {
+            if (gameMsg.tebakKataAnswer.round === tkRef.current.round) {
+              tkRef.current.recordPlayerAnswer(gameMsg.tebakKataAnswer)
+            }
+          }
+        } else if (gameMsg.type === "round_result") {
+          if (gameMsg.gameId === "tebakkata" && gameMsg.tebakKata) {
+            tkRef.current.syncState(gameMsg.tebakKata, sessionRef.current?.name)
+          }
+        } else if (gameMsg.type === "game_over") {
+          if (gameMsg.gameId === "tebakkata" && gameMsg.tebakKata) {
+            tkRef.current.syncState(gameMsg.tebakKata, sessionRef.current?.name)
+            toast.success("Game Tebak Kata selesai! Lihat Klasemen Akhir!")
+          }
+        } else if (gameMsg.type === "next") {
+          if (gameMsg.gameId === "tebakkata" && gameMsg.tebakKata) {
+            tkRef.current.syncState(gameMsg.tebakKata, sessionRef.current?.name)
+            toast.info(`Babak ${gameMsg.tebakKata.round} dimulai!`)
+          }
+        } else if (gameMsg.type === "move") {
+          if (gameMsg.index !== undefined) {
+            const moveResult = tttRef.current.makeMove(gameMsg.index)
+            if (
+              moveResult &&
+              !isGameModalOpenRef.current &&
+              moveResult.turn === myRoleRef.current
+            ) {
+              toast.info("It's your turn in Tic Tac Toe!")
+            }
+          }
+        } else if (gameMsg.type === "reset") {
+          tttRef.current.resetGame(gameMsg.turn)
+        } else if (gameMsg.type === "close") {
+          setActiveGame(null)
+          setIsGameModalOpen(false)
+          toast.info("Game session ended by host")
+        }
+        return
+      }
+    } catch {}
+
+    setMessages((prev) => [...prev, { ...message, isSelf: false }])
+    if (!isChatOpenRef.current) {
+      setUnreadCount((prev) => prev + 1)
+    }
+  }, [])
+
+  const dispatchChatMessage = useCallback((message: ChatMessage) => {
+    // 1. Send via WebSocket signaling server (instant & 100% reliable broadcast to all joined participants)
+    sigRef.current?.send({ type: "chat", message })
+    // 2. Also send via WebRTC DataChannel for redundancy
+    meetingRef.current?.sendChatMessage(message)
+  }, [])
+
   const handleSendMessage = (text: string) => {
     const currentSession = sessionRef.current
     const senderName = currentSession?.name ?? "You"
@@ -246,7 +342,8 @@ const Room = ({ roomId }: { roomId: string }) => {
       timestamp: Date.now(),
     }
 
-    meetingRef.current?.sendChatMessage(message)
+    processedMessageIds.current.add(message.id)
+    dispatchChatMessage(message)
     setMessages((prev) => [...prev, { ...message, isSelf: true }])
   }
 
@@ -258,63 +355,148 @@ const Room = ({ roomId }: { roomId: string }) => {
       type: "move",
       ...data,
     }
-    meetingRef.current?.sendChatMessage({
-      id: `game-${Date.now()}`,
+    const messageId = `game-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
+    processedMessageIds.current.add(messageId)
+    dispatchChatMessage({
+      id: messageId,
       senderId: currentSession?.name ?? "self",
       senderName: currentSession?.name ?? "Player",
       text: JSON.stringify(payload),
       timestamp: Date.now(),
     })
-  }, [])
+  }, [dispatchChatMessage])
+
+  const handleIncomingChatMessageRef = useRef(handleIncomingChatMessage)
+  useEffect(() => {
+    handleIncomingChatMessageRef.current = handleIncomingChatMessage
+  })
+
+  const sendGameSyncRef = useRef(sendGameSync)
+  useEffect(() => {
+    sendGameSyncRef.current = sendGameSync
+  })
 
   const handleSelectGame = (gameId: string) => {
     setIsGameListOpen(false)
     if (gameId === "tictactoe") {
       setIsSetupOpen(true)
     } else if (gameId === "tebakkata") {
-      const newPuzzle = tk.initRound()
-      setActiveGame("tebakkata")
-      setIsGameModalOpen(true)
-      sendGameSync({
-        type: "launch",
-        gameId: "tebakkata",
-        tebakKata: {
-          puzzle: newPuzzle,
-          round: 1,
-          scores: {},
-        },
-      })
-      toast.success("Game Tebak Kata dimulai!")
+      setIsTebakKataSetupOpen(true)
     }
+  }
+
+  const handleStartTebakKata = (config: TebakKataConfig) => {
+    setIsTebakKataSetupOpen(false)
+    const payload = tk.startNewGame(config)
+    setActiveGame("tebakkata")
+    setIsGameModalOpen(true)
+    sendGameSync({
+      type: "launch",
+      gameId: "tebakkata",
+      tebakKata: payload,
+    })
+    toast.success(`Game Tebak Kata dimulai (${config.totalRounds} Babak)!`)
   }
 
   const handleSelectChoice = (choiceIndex: number) => {
-    const result = tk.selectChoice(choiceIndex)
-    if (result?.solved) {
-      const myName = sessionRef.current?.name ?? "Player"
-      tk.markSolvedBy(myName)
+    const myName = sessionRef.current?.name ?? "Player"
+    const elapsed = Math.floor((Date.now() - tk.roundStartedAt) / 1000)
+    const timeLeft = Math.max(0, tk.roundDuration - elapsed)
+    const result = tk.selectChoice(choiceIndex, myName, timeLeft)
+    if (result?.completed) {
+      if (result.isCorrect) {
+        toast.success(`🎉 Benar! +${result.answer.pointsEarned} Poin!`)
+      } else {
+        toast.error("❌ Jawaban Anda belum tepat!")
+      }
       sendGameSync({
-        type: "solve",
+        type: "answer",
         gameId: "tebakkata",
-        solvedBy: myName,
+        tebakKataAnswer: { ...result.answer, round: tk.round },
       })
-      toast.success(`🎉 Hebat! Kamu berhasil menebak kata: ${result.word}!`)
     }
   }
 
-  const handleNextWord = (category?: WordCategory) => {
-    const nextPuzzle = tk.initRound(category)
-    sendGameSync({
-      type: "next",
-      gameId: "tebakkata",
-      tebakKata: {
-        puzzle: nextPuzzle,
-        round: tk.round + 1,
+  const handleTebakKataTimeout = useCallback(() => {
+    const myName = sessionRef.current?.name ?? "Player"
+    const answer = tk.handleTimeout(myName)
+    if (answer) {
+      toast.error("⏱️ Waktu habis untuk babak ini!")
+      sendGameSync({
+        type: "answer",
+        gameId: "tebakkata",
+        tebakKataAnswer: { ...answer, round: tk.round },
+      })
+    }
+  }, [sendGameSync, tk])
+
+  // Coordinate Tebak Kata round transitions automatically on Host
+  const roundAdvanceTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => {
+    if (!session?.isHost || activeGame !== "tebakkata" || tk.status !== "playing") return
+
+    const activeParticipants = tiles.filter((t) => !t.isScreen)
+    if (activeParticipants.length === 0) return
+
+    const allAnswered = activeParticipants.every((p) => !!tk.answeredPlayers[p.name])
+
+    if (allAnswered && tk.puzzle) {
+      const resultPayload = {
+        config: tk.config,
+        puzzle: tk.puzzle,
+        round: tk.round,
+        totalRounds: tk.totalRounds,
+        roundDuration: tk.roundDuration,
+        roundStartedAt: tk.roundStartedAt,
+        status: "round_result" as const,
+        answeredPlayers: tk.answeredPlayers,
         scores: tk.scores,
-      },
-    })
-    toast.info(`Kata baru kategori ${nextPuzzle.category} siap ditebak!`)
-  }
+      }
+      tk.setStatus("round_result")
+      sendGameSync({
+        type: "round_result",
+        gameId: "tebakkata",
+        tebakKata: resultPayload,
+      })
+
+      if (roundAdvanceTimeoutRef.current) clearTimeout(roundAdvanceTimeoutRef.current)
+      roundAdvanceTimeoutRef.current = setTimeout(() => {
+        if (activeGameRef.current !== "tebakkata") return
+        if (tkRef.current.round < tkRef.current.totalRounds) {
+          const nextPayload = tkRef.current.advanceToNextRound(tkRef.current.round + 1)
+          sendGameSync({
+            type: "next",
+            gameId: "tebakkata",
+            tebakKata: nextPayload,
+          })
+        } else {
+          const gameOverPayload = {
+            config: tkRef.current.config,
+            puzzle: tkRef.current.puzzle!,
+            round: tkRef.current.round,
+            totalRounds: tkRef.current.totalRounds,
+            roundDuration: tkRef.current.roundDuration,
+            roundStartedAt: tkRef.current.roundStartedAt,
+            status: "game_over" as const,
+            answeredPlayers: tkRef.current.answeredPlayers,
+            scores: tkRef.current.scores,
+          }
+          tkRef.current.setStatus("game_over")
+          sendGameSync({
+            type: "game_over",
+            gameId: "tebakkata",
+            tebakKata: gameOverPayload,
+          })
+        }
+      }, 3500)
+    }
+  }, [
+    activeGame,
+    session?.isHost,
+    tiles,
+    tk,
+    sendGameSync,
+  ])
 
   const handleStartWithPlayers = (players: TicTacToePlayers) => {
     setIsSetupOpen(false)
@@ -401,6 +583,7 @@ const Room = ({ roomId }: { roomId: string }) => {
     const cleanup = () => {
       disposed = true
       sig?.close()
+      sigRef.current = null
       meeting?.close()
       meetingRef.current = null
       screenStreamRef.current?.getTracks().forEach((t) => t.stop())
@@ -451,8 +634,41 @@ const Room = ({ roomId }: { roomId: string }) => {
           for (const peer of msg.peers) addPeer(peer.peerId, peer.name, false)
           setJoined(true)
           break
+        case "chat":
+          handleIncomingChatMessageRef.current(msg.message)
+          break
         case "peer-joined":
           addPeer(msg.peerId, msg.name, true)
+          // If host has an active game, immediately synchronize state to new peer
+          if (sessionRef.current?.isHost && activeGameRef.current) {
+            if (activeGameRef.current === "tebakkata" && tkRef.current.puzzle) {
+              sendGameSyncRef.current({
+                type: "launch",
+                gameId: "tebakkata",
+                tebakKata: {
+                  config: tkRef.current.config,
+                  puzzle: tkRef.current.puzzle,
+                  round: tkRef.current.round,
+                  totalRounds: tkRef.current.totalRounds,
+                  roundDuration: tkRef.current.roundDuration,
+                  roundStartedAt: tkRef.current.roundStartedAt,
+                  status: tkRef.current.status,
+                  answeredPlayers: tkRef.current.answeredPlayers,
+                  scores: tkRef.current.scores,
+                },
+              })
+            } else if (activeGameRef.current === "tictactoe" && tttRef.current.players) {
+              sendGameSyncRef.current({
+                type: "launch",
+                gameId: "tictactoe",
+                players: tttRef.current.players,
+                board: tttRef.current.board,
+                turn: tttRef.current.turn,
+                winner: tttRef.current.winner,
+                winningLine: tttRef.current.winningLine,
+              })
+            }
+          }
           break
         case "peer-left":
           meeting?.removePeer(msg.peerId)
@@ -510,71 +726,11 @@ const Room = ({ roomId }: { roomId: string }) => {
       mediaResult.warnings.forEach((warning) => toast.info(warning))
 
       sig = new SignalingClient()
+      sigRef.current = sig
       meeting = new Meeting(localStream, (to, data) => sig?.send({ type: "signal", to, data }))
       meetingRef.current = meeting
       meeting.setLocalMediaState(initialCamOff, initialMuted)
-
-      meeting.onChatMessage = (message) => {
-        try {
-          const parsed = JSON.parse(message.text)
-          if (parsed.__nanomeeter_game__) {
-            const gameMsg = parsed as GameSyncMessage
-            if (gameMsg.type === "launch") {
-              setActiveGame(gameMsg.gameId)
-              setIsGameModalOpen(true)
-              if (gameMsg.gameId === "tictactoe" && gameMsg.players) {
-                tttRef.current.syncState({
-                  players: gameMsg.players,
-                  board: gameMsg.board ?? Array(9).fill(null),
-                  turn: gameMsg.turn ?? "X",
-                  roundStarter: gameMsg.turn ?? "X",
-                  winner: null,
-                  winningLine: null,
-                })
-                const pX = gameMsg.players?.X.name || "Player X"
-                const pO = gameMsg.players?.O.name || "Player O"
-                toast.info(`Tic Tac Toe: ${pX} vs ${pO}`)
-              } else if (gameMsg.gameId === "tebakkata" && gameMsg.tebakKata) {
-                tkRef.current.syncState(gameMsg.tebakKata)
-                toast.info("Host memulai game Tebak Kata!")
-              }
-            } else if (gameMsg.type === "solve") {
-              if (gameMsg.gameId === "tebakkata" && gameMsg.solvedBy) {
-                tkRef.current.markSolvedBy(gameMsg.solvedBy)
-                toast.success(`🎉 ${gameMsg.solvedBy} berhasil menebak kata!`)
-              }
-            } else if (gameMsg.type === "next") {
-              if (gameMsg.gameId === "tebakkata" && gameMsg.tebakKata) {
-                tkRef.current.syncState(gameMsg.tebakKata)
-                toast.info(`Kata baru kategori ${gameMsg.tebakKata.puzzle.category}!`)
-              }
-            } else if (gameMsg.type === "move") {
-              if (gameMsg.index !== undefined) {
-                const moveResult = tttRef.current.makeMove(gameMsg.index)
-                if (
-                  moveResult &&
-                  !isGameModalOpenRef.current &&
-                  moveResult.turn === myRoleRef.current
-                ) {
-                  toast.info("It's your turn in Tic Tac Toe!")
-                }
-              }
-            } else if (gameMsg.type === "reset") {
-              tttRef.current.resetGame(gameMsg.turn)
-            } else if (gameMsg.type === "close") {
-              setActiveGame(null)
-              setIsGameModalOpen(false)
-              toast.info("Game session ended by host")
-            }
-            return
-          }
-        } catch {}
-
-        setMessages((prev) => [...prev, { ...message, isSelf: false }])
-        if (!isChatOpenRef.current) {
-          setUnreadCount((prev) => prev + 1)
-        }
-      }
+      meeting.onChatMessage = (msg) => handleIncomingChatMessageRef.current(msg)
 
       meeting.onPeerMediaState = (peerId, state) => {
         setTiles((prev) =>
@@ -758,6 +914,12 @@ const Room = ({ roomId }: { roomId: string }) => {
         onStart={handleStartWithPlayers}
       />
 
+      <TebakKataSetupModal
+        isOpen={isTebakKataSetupOpen}
+        onClose={() => setIsTebakKataSetupOpen(false)}
+        onStart={handleStartTebakKata}
+      />
+
       <TicTacToeModal
         isOpen={activeGame === "tictactoe" && isGameModalOpen}
         onClose={handleCloseModal}
@@ -779,20 +941,28 @@ const Room = ({ roomId }: { roomId: string }) => {
         isOpen={activeGame === "tebakkata" && isGameModalOpen}
         onClose={handleCloseModal}
         onEndGame={session?.isHost ? handleEndGameSession : undefined}
+        onPlayAgain={session?.isHost ? () => { setIsGameModalOpen(false); setIsTebakKataSetupOpen(true); } : undefined}
         puzzle={tk.puzzle}
         placedLetters={tk.placedLetters}
         usedChoiceIndices={tk.usedChoiceIndices}
         isSolved={tk.isSolved}
         isIncorrect={tk.isIncorrect}
-        solvedBy={tk.solvedBy}
+        hasAnswered={tk.hasAnswered}
+        myAnswer={tk.myAnswer}
+        answeredPlayers={tk.answeredPlayers}
         scores={tk.scores}
         round={tk.round}
+        totalRounds={tk.totalRounds}
+        roundDuration={tk.roundDuration}
+        roundStartedAt={tk.roundStartedAt}
+        status={tk.status}
         isHost={!!session?.isHost}
         currentUserName={session?.name ?? "You"}
+        totalActivePlayers={tiles.filter((t) => !t.isScreen).length}
         onSelectChoice={handleSelectChoice}
         onRemoveLetter={tk.removeLetter}
         onResetPlaced={tk.resetPlaced}
-        onNextWord={session?.isHost ? handleNextWord : undefined}
+        onTimeout={handleTebakKataTimeout}
       />
 
       <RoomControls

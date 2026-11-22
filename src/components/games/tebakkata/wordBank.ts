@@ -52,10 +52,6 @@ export const generateWordPuzzle = (
   }
 
   const len = word.length
-  // Determine number of blanks (between 2 and 3, max 4)
-  let numBlanks = 2
-  if (len >= 6 && len <= 8) numBlanks = 2
-  if (len >= 9) numBlanks = 3
 
   // Candidates for blanks: letters from index 1 to len-1 (skip spaces and keep index 0 as clue)
   const candidateIndices: number[] = []
@@ -63,6 +59,12 @@ export const generateWordPuzzle = (
     if (word[i] !== " ") {
       candidateIndices.push(i)
     }
+  }
+
+  // Huruf yang hilang bisa 2 bisa juga 3 huruf
+  let numBlanks = Math.random() < 0.5 ? 2 : 3
+  if (candidateIndices.length < 3) {
+    numBlanks = Math.min(2, candidateIndices.length)
   }
 
   const shuffledCandidates = shuffle(candidateIndices)

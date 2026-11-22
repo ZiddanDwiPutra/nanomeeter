@@ -1,4 +1,4 @@
-import type { TebakKataSyncPayload } from "./wordguess"
+import type { TebakKataPlayerAnswer, TebakKataSyncPayload } from "./wordguess"
 
 export type PlayerMark = "X" | "O"
 export type BoardState = (PlayerMark | null)[]
@@ -16,7 +16,16 @@ export interface TicTacToePlayers {
 
 export interface GameSyncMessage {
   __nanomeeter_game__: true
-  type: "launch" | "move" | "reset" | "close" | "solve" | "next"
+  type:
+    | "launch"
+    | "move"
+    | "reset"
+    | "close"
+    | "solve"
+    | "next"
+    | "answer"
+    | "round_result"
+    | "game_over"
   gameId: string
   players?: TicTacToePlayers
   board?: BoardState
@@ -27,5 +36,6 @@ export interface GameSyncMessage {
   index?: number
   player?: PlayerMark
   tebakKata?: TebakKataSyncPayload
+  tebakKataAnswer?: TebakKataPlayerAnswer & { round: number }
   solvedBy?: string
 }

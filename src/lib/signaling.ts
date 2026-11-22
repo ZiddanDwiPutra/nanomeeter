@@ -1,3 +1,5 @@
+import type { ChatMessage } from "@/types/chat"
+
 export interface PeerInfo {
   peerId: string
   name: string
@@ -10,11 +12,13 @@ export type ServerMessage =
   | { type: "peer-joined"; peerId: string; name: string }
   | { type: "peer-left"; peerId: string }
   | { type: "signal"; from: string; data: unknown }
+  | { type: "chat"; from: string; message: ChatMessage }
 
 export type ClientMessage =
   | { type: "create"; roomId: string; password: string; name: string }
   | { type: "join"; roomId: string; password: string; name: string }
   | { type: "signal"; to: string; data: unknown }
+  | { type: "chat"; message: ChatMessage }
 
 export class SignalingClient {
   private ws: WebSocket

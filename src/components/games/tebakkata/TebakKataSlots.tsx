@@ -5,6 +5,7 @@ interface TebakKataSlotsProps {
   placedLetters: Record<number, { letter: string; choiceIndex: number }>
   isSolved: boolean
   isIncorrect: boolean
+  revealWord?: boolean
   onRemoveLetter: (blankIndex: number) => void
 }
 
@@ -13,6 +14,7 @@ export const TebakKataSlots = ({
   placedLetters,
   isSolved,
   isIncorrect,
+  revealWord,
   onRemoveLetter,
 }: TebakKataSlotsProps) => {
   return (
@@ -37,26 +39,30 @@ export const TebakKataSlots = ({
         }
 
         const hasValue = !!placed
+        const displayLetter = revealWord && !hasValue ? actualLetter : placed?.letter
+
         return (
           <button
             key={index}
             type="button"
-            disabled={!hasValue || isSolved}
+            disabled={!hasValue || isSolved || revealWord}
             onClick={() => onRemoveLetter(index)}
             className={`group relative flex size-11 items-center justify-center rounded-xl font-black text-lg sm:size-12 sm:text-xl transition-all select-none ${
               isSolved
                 ? "border-2 border-emerald-500 bg-emerald-500/20 text-emerald-400 scale-105"
                 : isIncorrect
-                ? "border-2 border-destructive bg-destructive/20 text-destructive animate-shake"
-                : hasValue
-                ? "border-2 border-cyan-500 bg-cyan-500/15 text-cyan-400 hover:bg-cyan-500/25 cursor-pointer shadow-md"
-                : "border-2 border-dashed border-primary/40 bg-background/50 text-transparent animate-pulse"
+                  ? "border-2 border-destructive bg-destructive/20 text-destructive animate-shake"
+                  : revealWord
+                    ? "border-2 border-amber-500/60 bg-amber-500/15 text-amber-400"
+                    : hasValue
+                      ? "border-2 border-primary/70 bg-primary/10 text-primary hover:border-destructive hover:bg-destructive/10 hover:text-destructive cursor-pointer"
+                      : "border-2 border-dashed border-border/80 bg-muted/20 text-muted-foreground/40"
             }`}
-            title={hasValue && !isSolved ? "Hapus huruf ini" : undefined}
+            title={hasValue && !isSolved && !revealWord ? "Tap untuk menghapus huruf" : undefined}
           >
-            {hasValue ? placed.letter : "_"}
-            {hasValue && !isSolved && (
-              <span className="absolute -top-1 -right-1 hidden size-4 items-center justify-center rounded-full bg-destructive text-[9px] text-white group-hover:flex">
+            {displayLetter ?? ""}
+            {hasValue && !isSolved && !revealWord && (
+              <span className="absolute -top-1 -right-1 hidden size-3.5 items-center justify-center rounded-full bg-destructive text-[9px] font-bold text-white group-hover:flex">
                 ×
               </span>
             )}
